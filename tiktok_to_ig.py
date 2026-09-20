@@ -157,6 +157,8 @@ def publish_to_instagram(video_url, caption):
         },
         timeout=30,
     )
+    if not resp.ok:
+        print(f"Instagram media creation failed ({resp.status_code}): {resp.text}")
     resp.raise_for_status()
     creation_id = resp.json()["id"]
 
