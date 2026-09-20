@@ -1,0 +1,2 @@
+# Add one TikTok video URL per line below.
+# The bot posts the top line to Instagram, then removes it.
