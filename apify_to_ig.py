@@ -25,7 +25,7 @@ import requests
 
 # ---- Configuration -------------------------------------------------------
 
-TIKTOK_USERNAMES = ["warmpets520"]  # add more usernames here later if wanted
+TIKTOK_USERNAMES = ["warmpets520", "funny_dogs001"]  # add more usernames here later if wanted
 MAX_ITEMS_PER_ACCOUNT = 20
 POSTED_LOG_FILE = "posted_log.txt"
 
