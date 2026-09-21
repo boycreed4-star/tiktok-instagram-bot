@@ -25,7 +25,7 @@ import requests
 
 # ---- Configuration -------------------------------------------------------
 
-TIKTOK_USERNAMES = ["warmpets520", "funny_dogs001"]  # add more usernames here later if wanted
+TIKTOK_USERNAMES = ["funny_dogs001"]  # add more usernames here later if wanted
 MAX_ITEMS_PER_ACCOUNT = 20
 POSTED_LOG_FILE = "posted_log.txt"
 
@@ -206,9 +206,13 @@ def main():
     print(f"Published: {result}")
 
     print("Also posting to Story...")
-    story_result = post_to_story(video_url)
-    if story_result:
-        print(f"Story posted: {story_result}")
+    duration_seconds = (best.get("durationMS") or 0) / 1000
+    if duration_seconds > 58:
+        print(f"Skipping story post -- video is {duration_seconds:.0f}s, longer than Instagram's ~60s Story limit.")
+    else:
+        story_result = post_to_story(video_url)
+        if story_result:
+            print(f"Story posted: {story_result}")
 
     mark_as_posted(video_id)
     print("Marked as posted.")
