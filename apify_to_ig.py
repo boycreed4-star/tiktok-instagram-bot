@@ -97,6 +97,7 @@ def publish_to_instagram(video_url, caption):
             "video_url": video_url,
             "caption": caption,
             "media_type": "REELS",
+            "like_and_view_counts_disabled": "true",  # hides like/view counts
             "access_token": IG_ACCESS_TOKEN,
         },
         timeout=30,
@@ -134,6 +135,52 @@ def publish_to_instagram(video_url, caption):
     return resp.json()
 
 
+def post_to_story(video_url):
+    """Also share the same video to the account's Story."""
+    resp = requests.post(
+        f"{GRAPH_API_BASE}/{IG_USER_ID}/media",
+        data={
+            "video_url": video_url,
+            "media_type": "STORIES",
+            "access_token": IG_ACCESS_TOKEN,
+        },
+        timeout=30,
+    )
+    if not resp.ok:
+        print(f"Story media creation failed ({resp.status_code}): {resp.text}")
+        return None
+    creation_id = resp.json()["id"]
+
+    for attempt in range(20):
+        time.sleep(10)
+        resp = requests.get(
+            f"{GRAPH_API_BASE}/{creation_id}",
+            params={"fields": "status_code", "access_token": IG_ACCESS_TOKEN},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        status = resp.json().get("status_code")
+        print(f"Story processing status: {status} (check {attempt + 1}/20)")
+        if status == "FINISHED":
+            break
+        if status == "ERROR":
+            print("Instagram reported an error processing the story -- skipping story post.")
+            return None
+    else:
+        print("Timed out waiting for story processing -- skipping story post.")
+        return None
+
+    resp = requests.post(
+        f"{GRAPH_API_BASE}/{IG_USER_ID}/media_publish",
+        data={"creation_id": creation_id, "access_token": IG_ACCESS_TOKEN},
+        timeout=30,
+    )
+    if not resp.ok:
+        print(f"Story publish failed ({resp.status_code}): {resp.text}")
+        return None
+    return resp.json()
+
+
 # ---- Main -------------------------------------------------------------------
 
 
@@ -157,6 +204,11 @@ def main():
     print("Publishing to Instagram...")
     result = publish_to_instagram(video_url, caption)
     print(f"Published: {result}")
+
+    print("Also posting to Story...")
+    story_result = post_to_story(video_url)
+    if story_result:
+        print(f"Story posted: {story_result}")
 
     mark_as_posted(video_id)
     print("Marked as posted.")
