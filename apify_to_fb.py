@@ -15,7 +15,7 @@ import requests
 
 # ---- Configuration -------------------------------------------------------
 
-TIKTOK_USERNAMES = ["funny_dogs001"]  # keep in sync with the Instagram bot, or set independently
+TIKTOK_USERNAMES = ["baster.62"]  # keep in sync with the Instagram bot, or set independently
 MAX_ITEMS_PER_ACCOUNT = 20
 POSTED_LOG_FILE = "posted_log_fb.txt"
 
