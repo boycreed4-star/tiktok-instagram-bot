@@ -71,6 +71,8 @@ def fetch_candidates():
         "maxItems": MAX_ITEMS_PER_ACCOUNT,
     }
     resp = requests.post(url, params={"token": APIFY_API_TOKEN}, json=payload, timeout=180)
+    if not resp.ok:
+        print(f"Apify request failed ({resp.status_code}): {resp.text[:1000]}")
     resp.raise_for_status()
     return resp.json()
 
