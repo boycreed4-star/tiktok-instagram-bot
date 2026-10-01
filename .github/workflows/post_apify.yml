@@ -19,7 +19,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests yt-dlp
+        run: pip install requests yt-dlp curl_cffi
 
       - name: Run bot
         env:
