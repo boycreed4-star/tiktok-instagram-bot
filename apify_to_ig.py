@@ -1,95 +1,89 @@
 """
-Fully automatic TikTok -> Instagram pipeline, powered by Apify (which
-handles TikTok access via residential proxy, avoiding the datacenter-IP
-block we hit with direct scraping).
-
-Each run:
-    1. Asks Apify for the account's recent videos + engagement stats
-    2. Filters out anything already posted (tracked in posted_log.txt)
-    3. Picks the single highest-engagement remaining video
-    4. Posts it directly to Instagram (using Apify's video URL --
-       no download/re-hosting needed)
-    5. Logs it as posted
-
-Requires these environment variables:
-    APIFY_API_TOKEN   - your Apify API token
-    IG_USER_ID          - your Instagram Business Account's numeric ID
-    IG_ACCESS_TOKEN      - your long-lived Instagram access token
+Reads the next TikTok URL from queue.txt, posts it to Instagram as a Reel,
+then removes it from the queue. Uses yt-dlp + a GitHub Release for hosting
+-- no paid API involved.
 """
 
 import json
 import os
+import subprocess
 import time
 
 import requests
 
-# ---- Configuration -------------------------------------------------------
-
-TIKTOK_USERNAMES = ["funny_dogs001"]  # add more usernames here later if wanted
-MAX_ITEMS_PER_ACCOUNT = 20
-POSTED_LOG_FILE = "posted_log.txt"
-
-APIFY_API_TOKEN = os.environ["APIFY_API_TOKEN"]
-APIFY_ACTOR_ID = "z6GDWcyb4ZVT10ogS"
+QUEUE_FILE = "queue.txt"
+VIDEO_FILE = "latest_video.mp4"
 
 IG_USER_ID = os.environ["IG_USER_ID"]
 IG_ACCESS_TOKEN = os.environ["IG_ACCESS_TOKEN"]
+GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+GITHUB_REPOSITORY = os.environ["GITHUB_REPOSITORY"]
+
 GRAPH_API_BASE = "https://graph.instagram.com"
 
 
-# ---- Posted-video tracking ----------------------------------------------------
+def read_queue():
+    if not os.path.exists(QUEUE_FILE):
+        return []
+    with open(QUEUE_FILE, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
 
 
-def load_posted_ids():
-    if os.path.exists(POSTED_LOG_FILE):
-        with open(POSTED_LOG_FILE, "r", encoding="utf-8") as f:
-            return set(line.strip() for line in f if line.strip())
-    return set()
+def write_queue(urls):
+    with open(QUEUE_FILE, "w", encoding="utf-8") as f:
+        for url in urls:
+            f.write(url + "\n")
 
 
-def mark_as_posted(video_id):
-    with open(POSTED_LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(video_id + "\n")
+def get_video_info(video_url):
+    result = subprocess.run(
+        ["yt-dlp", "-J", video_url],
+        capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"yt-dlp failed to fetch video info: {result.stderr[:500]}")
+    data = json.loads(result.stdout)
+    return {"id": data.get("id"), "title": data.get("title", "")}
 
 
-# ---- Apify (finds + ranks candidate videos) ---------------------------------
+def download_video(video_url):
+    if os.path.exists(VIDEO_FILE):
+        os.remove(VIDEO_FILE)
+    result = subprocess.run(
+        ["yt-dlp", "-f", "best", "-o", VIDEO_FILE, video_url],
+        capture_output=True, text=True, timeout=180,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"yt-dlp failed to download video: {result.stderr[:500]}")
+    if not os.path.exists(VIDEO_FILE):
+        raise RuntimeError("Download reported success but video file is missing.")
 
 
-def engagement_score(video):
-    likes = video.get("likeCount") or 0
-    comments = video.get("commentCount") or 0
-    shares = video.get("shareCount") or 0
-    saves = video.get("collectCount") or 0
-    # Weight saves and shares higher -- stronger signals than a passive like.
-    return likes + (comments * 2) + (shares * 3) + (saves * 3)
+def upload_to_github_release(video_id):
+    owner_repo = GITHUB_REPOSITORY
+    tag = f"tiktok-{video_id}-{int(time.time())}"
+    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
 
-
-def fetch_candidates():
-    url = f"https://api.apify.com/v2/acts/{APIFY_ACTOR_ID}/run-sync-get-dataset-items"
-    payload = {
-        "usernames": TIKTOK_USERNAMES,
-        "maxItems": MAX_ITEMS_PER_ACCOUNT,
-    }
-    resp = requests.post(url, params={"token": APIFY_API_TOKEN}, json=payload, timeout=180)
-    if not resp.ok:
-        print(f"Apify request failed ({resp.status_code}): {resp.text[:1000]}")
+    resp = requests.post(
+        f"https://api.github.com/repos/{owner_repo}/releases",
+        headers=headers,
+        json={"tag_name": tag, "name": tag, "draft": False, "prerelease": False},
+        timeout=30,
+    )
     resp.raise_for_status()
-    return resp.json()
+    upload_url = resp.json()["upload_url"].split("{")[0]
 
+    with open(VIDEO_FILE, "rb") as f:
+        video_data = f.read()
 
-def pick_best_candidate():
-    posted_ids = load_posted_ids()
-    videos = fetch_candidates()
-
-    candidates = [v for v in videos if v.get("id") not in posted_ids and v.get("videoUrl")]
-    if not candidates:
-        return None
-
-    candidates.sort(key=engagement_score, reverse=True)
-    return candidates[0]
-
-
-# ---- Instagram Content Publishing API ----------------------------------------
+    resp = requests.post(
+        f"{upload_url}?name=video.mp4",
+        headers={**headers, "Content-Type": "video/mp4"},
+        data=video_data,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    return resp.json()["browser_download_url"]
 
 
 def publish_to_instagram(video_url, caption):
@@ -99,7 +93,7 @@ def publish_to_instagram(video_url, caption):
             "video_url": video_url,
             "caption": caption,
             "media_type": "REELS",
-            "like_and_view_counts_disabled": "true",  # hides like/view counts
+            "like_and_view_counts_disabled": "true",
             "access_token": IG_ACCESS_TOKEN,
         },
         timeout=30,
@@ -137,87 +131,34 @@ def publish_to_instagram(video_url, caption):
     return resp.json()
 
 
-def post_to_story(video_url):
-    """Also share the same video to the account's Story."""
-    resp = requests.post(
-        f"{GRAPH_API_BASE}/{IG_USER_ID}/media",
-        data={
-            "video_url": video_url,
-            "media_type": "STORIES",
-            "access_token": IG_ACCESS_TOKEN,
-        },
-        timeout=30,
-    )
-    if not resp.ok:
-        print(f"Story media creation failed ({resp.status_code}): {resp.text}")
-        return None
-    creation_id = resp.json()["id"]
-
-    for attempt in range(20):
-        time.sleep(10)
-        resp = requests.get(
-            f"{GRAPH_API_BASE}/{creation_id}",
-            params={"fields": "status_code", "access_token": IG_ACCESS_TOKEN},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        status = resp.json().get("status_code")
-        print(f"Story processing status: {status} (check {attempt + 1}/20)")
-        if status == "FINISHED":
-            break
-        if status == "ERROR":
-            print("Instagram reported an error processing the story -- skipping story post.")
-            return None
-    else:
-        print("Timed out waiting for story processing -- skipping story post.")
-        return None
-
-    resp = requests.post(
-        f"{GRAPH_API_BASE}/{IG_USER_ID}/media_publish",
-        data={"creation_id": creation_id, "access_token": IG_ACCESS_TOKEN},
-        timeout=30,
-    )
-    if not resp.ok:
-        print(f"Story publish failed ({resp.status_code}): {resp.text}")
-        return None
-    return resp.json()
-
-
-# ---- Main -------------------------------------------------------------------
-
-
 def main():
-    print("Fetching candidates from Apify...")
-    best = pick_best_candidate()
+    queue = read_queue()
 
-    if best is None:
-        print("No new unposted candidates found.")
+    if not queue:
+        print("Queue is empty -- nothing to post. Add a TikTok URL to queue.txt.")
         return
 
-    video_id = best["id"]
-    video_url = best["videoUrl"]
-    caption = (best.get("description") or "")[:2200]
-    score = engagement_score(best)
+    next_url = queue[0]
+    remaining = queue[1:]
 
-    print(f"Best candidate: {video_id} (score={score}, likes={best.get('likeCount')}, "
-          f"comments={best.get('commentCount')}, shares={best.get('shareCount')}, "
-          f"saves={best.get('collectCount')})")
+    print(f"Processing next queued video: {next_url}")
+    video_info = get_video_info(next_url)
+    video_id = video_info["id"]
 
+    print(f"Downloading video {video_id}...")
+    download_video(next_url)
+
+    print("Uploading to GitHub Release for public hosting...")
+    public_video_url = upload_to_github_release(video_id)
+    print(f"Hosted at: {public_video_url}")
+
+    caption = video_info.get("title", "")
     print("Publishing to Instagram...")
-    result = publish_to_instagram(video_url, caption)
+    result = publish_to_instagram(public_video_url, caption)
     print(f"Published: {result}")
 
-    print("Also posting to Story...")
-    duration_seconds = (best.get("durationMS") or 0) / 1000
-    if duration_seconds > 58:
-        print(f"Skipping story post -- video is {duration_seconds:.0f}s, longer than Instagram's ~60s Story limit.")
-    else:
-        story_result = post_to_story(video_url)
-        if story_result:
-            print(f"Story posted: {story_result}")
-
-    mark_as_posted(video_id)
-    print("Marked as posted.")
+    write_queue(remaining)
+    print(f"Removed from queue. {len(remaining)} video(s) remaining.")
 
 
 if __name__ == "__main__":
