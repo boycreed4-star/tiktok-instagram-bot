@@ -1,4 +1,3 @@
-
 name: Post queue to Instagram
 
 on:
@@ -23,7 +22,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install yt-dlp requests
+        run: pip install -U "yt-dlp[default,curl-cffi]" requests
 
       - name: Post next video
         env:
